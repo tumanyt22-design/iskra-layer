@@ -10,10 +10,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
-import java.io.File
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
@@ -391,7 +388,7 @@ class LayerOverlay(private val ctx: Context) {
         val panel = LinearLayout(ctx); panel.orientation = LinearLayout.VERTICAL
         panel.setPadding(dp(20), dp(20), dp(14), dp(18))
         val r = dp(22).toFloat()
-        val panelBg = GradientDrawable(); panelBg.setColor(mods.bgColor ?: 0xF20E1013.toInt())
+        val panelBg = GradientDrawable(); panelBg.setColor(0xF20E1013.toInt())
         panelBg.cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r); panel.background = panelBg
 
         // Собираем блоки в порядке из редактора
