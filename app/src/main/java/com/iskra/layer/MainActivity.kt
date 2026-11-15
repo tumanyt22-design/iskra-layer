@@ -429,6 +429,12 @@ class MainActivity : Activity() {
         restartLayer()
     }
 
+    private fun pickBgImage() {
+        val i = Intent(Intent.ACTION_GET_CONTENT)
+        i.type = "image/*"
+        startActivityForResult(i, 99)
+    }
+
     private fun pickMod() {
         try {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -440,6 +446,21 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 99 && resultCode == RESULT_OK) {
+            val uri = data?.data ?: return
+            try {
+                val input = contentResolver.openInputStream(uri) ?: return
+                val file = File(filesDir, "custom_bg.jpg")
+                val output = file.outputStream()
+                input.copyTo(output)
+                input.close(); output.close()
+                LayerPrefs.putString(this, "custom_bg", file.absolutePath)
+                toast("Фон сохранен")
+                restartLayer()
+                renderTab()
+            } catch (e: Exception) { toast("Ошибка: ${e.message}") }
+            return
+        }
         if (requestCode != 77 || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         try {
@@ -496,7 +517,8 @@ class MainActivity : Activity() {
         b.addView(c, lpWrapFull(0))
 
         val act = card()
-        act.addView(btn("+ Импорт файла (.json)", false) { pickMod() }, lpFull(48, 0))
+        act.addView(btn("🖼 Выбрать фон из галереи", true) { pickBgImage() }, lpFull(48, 0))
+        act.addView(btn("+ Импорт файла (.json)", false) { pickMod() }, lpFull(48, 8))
         act.addView(btn("+ Вставить текст мода", false) { pasteMod() }, lpFull(48, 8))
         act.addView(btn("+ Добавить пример мода", false) { addExample() }, lpFull(48, 8))
         b.addView(act, lpWrapFull(12))
