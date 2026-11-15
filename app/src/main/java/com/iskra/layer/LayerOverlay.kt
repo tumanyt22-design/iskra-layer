@@ -57,14 +57,22 @@ class LayerOverlay(private val ctx: Context) {
     // Моды читаются один раз при создании панели
     private val mods: ModState = Mods.load(ctx)
     private fun hid(key: String): Boolean = mods.hidden.contains(key)
-    private fun hideIf(v: View, key: String) { if (hid(key)) v.visibility = View.GONE }
+
+    // Блок показывается, если включён в редакторе и не скрыт модом
+    private fun blockVisible(id: String): Boolean {
+        if (!PanelLayout.isOn(ctx, id)) return false
+        return id == "buttons" || !hid(id)
+    }
 
     private val sizeIdx = LayerPrefs.getInt(ctx, "size", 1)
     private val posIdx = LayerPrefs.getInt(ctx, "pos", 1)
-    private val eyesOn = LayerPrefs.getInt(ctx, "eyes", 1) == 1
     private val fixedColor: Int? = mods.accent ?: when (LayerPrefs.getInt(ctx, "color", 0)) {
-        1 -> 0xFFFFC107.toInt(); 2 -> 0xFF00E5FF.toInt(); 3 -> 0xFFFF4081.toInt()
-        4 -> 0xFF69F0AE.toInt(); 5 -> 0xFFEEEEEE.toInt(); else -> null
+        1 -> 0xFFFFC107.toInt()
+        2 -> 0xFF00E5FF.toInt()
+        3 -> 0xFFFF4081.toInt()
+        4 -> 0xFF69F0AE.toInt()
+        5 -> 0xFFEEEEEE.toInt()
+        else -> null
     }
 
     private val panelW = dp(when (sizeIdx) { 0 -> 230; 2 -> 300; else -> 260 })
@@ -212,6 +220,12 @@ class LayerOverlay(private val ctx: Context) {
         lp.weight = pct; f.layoutParams = lp
     }
 
+    private fun barLp(): LinearLayout.LayoutParams {
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(5))
+        lp.topMargin = dp(8)
+        return lp
+    }
+
     // Действия кнопок из модов
     private fun runModAction(b: ModButton) {
         when (b.action) {
@@ -233,23 +247,43 @@ class LayerOverlay(private val ctx: Context) {
         }
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private fun build(): FrameLayout {
-        targets.clear()
-        val tv = label("--:--", 38f, Color.WHITE, true); val dv = label("", 12f, grey, false)
-        val bv = valueLabel(); val wv = valueLabel(); val vv = valueLabel(); val brv = valueLabel()
-        val ev = EyesView(ctx); ev.setActive(false); if (!eyesOn || hid("eyes")) ev.visibility = View.GONE
-        timeView = tv; dateView = dv; batteryView = bv; weatherView = wv; volView = vv; brightView = brv; eyes = ev
+    // ---------- блоки панели ----------
 
-        val timeCol = LinearLayout(ctx); timeCol.orientation = LinearLayout.VERTICAL; timeCol.addView(tv); timeCol.addView(dv)
-        hideIf(timeCol, "clock")
+    private fun makeEyes(): EyesView {
+        val ev = EyesView(ctx)
+        ev.setActive(false)
+        eyes = ev
+        targets.add(Tap(ev, dp(8)) { poke() })
+        return ev
+    }
+
+    private fun buildClock(): LinearLayout {
+        val tv = label("--:--", 38f, Color.WHITE, true)
+        val dv = label("", 12f, grey, false)
+        timeView = tv; dateView = dv
+        val col = LinearLayout(ctx); col.orientation = LinearLayout.VERTICAL
+        col.addView(tv); col.addView(dv)
+        return col
+    }
+
+    // Часы и глаза рядом в одной строке (как в старой панели)
+    private fun buildHead(): LinearLayout {
+        val timeCol = buildClock()
+        val ev = makeEyes()
         val head = LinearLayout(ctx); head.orientation = LinearLayout.HORIZONTAL; head.gravity = Gravity.CENTER_VERTICAL
         head.addView(timeCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         head.addView(ev, LinearLayout.LayoutParams(dp(56), dp(32)))
-        targets.add(Tap(ev, dp(8)) { poke() })
+        return head
+    }
 
-        val sep = View(ctx); sep.background = sepBg
+    private fun buildEyesRow(): FrameLayout {
+        val ev = makeEyes()
+        val f = FrameLayout(ctx)
+        f.addView(ev, FrameLayout.LayoutParams(dp(84), dp(48), Gravity.CENTER))
+        return f
+    }
 
+    private fun buildMusic(): LinearLayout {
         val mTitle = label("", 13f, Color.WHITE, false); mTitle.maxLines = 1; mTitle.ellipsize = TextUtils.TruncateAt.END
         val prev = chip("⏮", 17f); val play = chip("▶", 17f); val next = chip("⏭", 17f)
         val ctl = LinearLayout(ctx); ctl.orientation = LinearLayout.HORIZONTAL
@@ -258,60 +292,128 @@ class LayerOverlay(private val ctx: Context) {
         mBox.addView(mTitle); mBox.addView(ctl, margin(8))
         musicBox = mBox; musicTitle = mTitle; playChip = play
         targets.add(Tap(prev, 0) { musicCmd(-1) }); targets.add(Tap(play, 0) { musicCmd(0) }); targets.add(Tap(next, 0) { musicCmd(1) })
+        return mBox
+    }
 
-        val mv = label("", 12f, grey, false); mv.visibility = View.GONE; messageView = mv
+    private fun buildBattery(): LinearLayout {
+        val bv = valueLabel(); batteryView = bv
+        val parts = makeBar(batFillBg); batFill = parts.fill
+        val col = LinearLayout(ctx); col.orientation = LinearLayout.VERTICAL
+        col.addView(infoRow("Батарея", bv))
+        col.addView(parts.bar, barLp())
+        return col
+    }
 
-        val batParts = makeBar(batFillBg); batFill = batParts.fill
-        val volParts = makeBar(volFillBg); volFill = volParts.fill; volBar = volParts.bar
-        val brightParts = makeBar(brightFillBg); brightFill = brightParts.fill; brightBar = brightParts.bar
+    private fun buildWeather(): LinearLayout {
+        val wv = valueLabel(); weatherView = wv
+        val col = LinearLayout(ctx); col.orientation = LinearLayout.VERTICAL
+        col.addView(infoRow("Погода", wv))
+        return col
+    }
 
-        val torch = chip("🔦", 18f); val cam = chip("📷", 18f); val cfg = chip("⚙", 18f); val silent = chip("🔔", 18f)
-        torchChip = torch; torchBg = torch.background as GradientDrawable; silentChip = silent; silentBg = silent.background as GradientDrawable
-        val actions = LinearLayout(ctx); actions.orientation = LinearLayout.HORIZONTAL
-        actions.addView(torch, cell(dp(40))); actions.addView(silent, cell(dp(40))); actions.addView(cam, cell(dp(40))); actions.addView(cfg, cell(dp(40)))
-        targets.add(Tap(torch, 0) { toggleTorch() }); targets.add(Tap(silent, 0) { toggleSilent() })
-        targets.add(Tap(cam, 0) { launch(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) })
-        targets.add(Tap(cfg, 0) { launch(Intent(Settings.ACTION_SETTINGS)) })
+    private fun buildVolume(): LinearLayout {
+        val vv = valueLabel(); volView = vv
+        val parts = makeBar(volFillBg); volFill = parts.fill; volBar = parts.bar
+        val col = LinearLayout(ctx); col.orientation = LinearLayout.VERTICAL
+        col.addView(infoRow("Громкость", vv))
+        col.addView(parts.bar, barLp())
+        return col
+    }
 
-        // Кнопки из модов: ряды по 4
-        val extra = LinearLayout(ctx); extra.orientation = LinearLayout.VERTICAL
-        var rowL = LinearLayout(ctx)
-        for ((idx, mb) in mods.buttons.withIndex()) {
-            if (idx % 4 == 0) {
-                rowL = LinearLayout(ctx); rowL.orientation = LinearLayout.HORIZONTAL
-                extra.addView(rowL, margin(if (idx == 0) 0 else 6))
-            }
-            val cv = chip(mb.icon, 18f)
-            rowL.addView(cv, cell(dp(40)))
-            targets.add(Tap(cv, 0) { runModAction(mb) })
+    private fun buildBrightness(): LinearLayout {
+        val brv = valueLabel(); brightView = brv
+        val parts = makeBar(brightFillBg); brightFill = parts.fill; brightBar = parts.bar
+        val col = LinearLayout(ctx); col.orientation = LinearLayout.VERTICAL
+        col.addView(infoRow("Яркость", brv))
+        col.addView(parts.bar, barLp())
+        return col
+    }
+
+    private fun buildButtons(): View? {
+        val showDefaults = !hid("buttons")
+        if (!showDefaults && mods.buttons.isEmpty()) return null
+        val col = LinearLayout(ctx); col.orientation = LinearLayout.VERTICAL
+
+        if (showDefaults) {
+            val torch = chip("🔦", 18f); val cam = chip("📷", 18f); val cfg = chip("⚙", 18f); val silent = chip("🔔", 18f)
+            torchChip = torch; torchBg = torch.background as GradientDrawable
+            silentChip = silent; silentBg = silent.background as GradientDrawable
+            val actions = LinearLayout(ctx); actions.orientation = LinearLayout.HORIZONTAL
+            actions.addView(torch, cell(dp(40))); actions.addView(silent, cell(dp(40)))
+            actions.addView(cam, cell(dp(40))); actions.addView(cfg, cell(dp(40)))
+            targets.add(Tap(torch, 0) { toggleTorch() }); targets.add(Tap(silent, 0) { toggleSilent() })
+            targets.add(Tap(cam, 0) { launch(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) })
+            targets.add(Tap(cfg, 0) { launch(Intent(Settings.ACTION_SETTINGS)) })
+            col.addView(actions)
         }
-        val rem = mods.buttons.size % 4
-        if (rem != 0) { for (k in rem until 4) rowL.addView(View(ctx), cell(dp(40))) }
 
-        val batRow = infoRow("Батарея", bv); val wRow = infoRow("Погода", wv)
-        val volRow = infoRow("Громкость", vv); val brRow = infoRow("Яркость", brv)
-        hideIf(batRow, "battery"); hideIf(batParts.bar, "battery")
-        hideIf(wRow, "weather")
-        hideIf(volRow, "volume"); hideIf(volParts.bar, "volume")
-        hideIf(brRow, "brightness"); hideIf(brightParts.bar, "brightness")
-        hideIf(actions, "buttons")
+        if (mods.buttons.isNotEmpty()) {
+            val extra = LinearLayout(ctx); extra.orientation = LinearLayout.VERTICAL
+            var rowL = LinearLayout(ctx)
+            for ((idx, mb) in mods.buttons.withIndex()) {
+                if (idx % 4 == 0) {
+                    rowL = LinearLayout(ctx); rowL.orientation = LinearLayout.HORIZONTAL
+                    extra.addView(rowL, margin(if (idx == 0) 0 else 6))
+                }
+                val cv = chip(mb.icon, 18f)
+                rowL.addView(cv, cell(dp(40)))
+                targets.add(Tap(cv, 0) { runModAction(mb) })
+            }
+            val rem = mods.buttons.size % 4
+            if (rem != 0) { for (k in rem until 4) rowL.addView(View(ctx), cell(dp(40))) }
+            col.addView(extra, margin(if (showDefaults) 8 else 0))
+        }
+        return col
+    }
+
+    private fun buildBlock(id: String): View? {
+        return when (id) {
+            "clock" -> buildClock()
+            "eyes" -> buildEyesRow()
+            "music" -> buildMusic()
+            "battery" -> buildBattery()
+            "weather" -> buildWeather()
+            "volume" -> buildVolume()
+            "brightness" -> buildBrightness()
+            "buttons" -> buildButtons()
+            else -> null
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun build(): FrameLayout {
+        targets.clear()
+        val mv = label("", 12f, grey, false); mv.visibility = View.GONE; messageView = mv
 
         val panel = LinearLayout(ctx); panel.orientation = LinearLayout.VERTICAL
         panel.setPadding(dp(20), dp(20), dp(14), dp(18))
         val r = dp(22).toFloat()
-        val panelBg = GradientDrawable(); panelBg.setColor(0xF20E1013.toInt()); panelBg.cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r); panel.background = panelBg
-        panel.addView(head); val sepLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-        sepLp.topMargin = dp(14); sepLp.bottomMargin = dp(10)
-        panel.addView(sep, sepLp)
-        panel.addView(mv, margin(4))
-        val mbLp = margin(0); mbLp.bottomMargin = dp(10)
-        panel.addView(mBox, mbLp)
-        panel.addView(batRow); val batLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(5)); batLp.topMargin = dp(8); panel.addView(batParts.bar, batLp)
-        panel.addView(wRow, margin(14))
-        panel.addView(volRow, margin(14)); val volLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(5)); volLp.topMargin = dp(8); panel.addView(volParts.bar, volLp)
-        panel.addView(brRow, margin(14)); val brLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(5)); brLp.topMargin = dp(8); panel.addView(brightParts.bar, brLp)
-        panel.addView(actions, margin(16))
-        if (mods.buttons.isNotEmpty()) panel.addView(extra, margin(8))
+        val panelBg = GradientDrawable(); panelBg.setColor(0xF20E1013.toInt())
+        panelBg.cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r); panel.background = panelBg
+
+        // Собираем блоки в порядке из редактора
+        val ids = ArrayList<String>()
+        for (id in PanelLayout.order(ctx)) { if (blockVisible(id)) ids.add(id) }
+
+        var first = true
+        var i = 0
+        while (i < ids.size) {
+            val id = ids[i]
+            val v: View? = if (id == "clock" && i + 1 < ids.size && ids[i + 1] == "eyes") { i++; buildHead() } else buildBlock(id)
+            i++
+            if (v != null) {
+                panel.addView(v, margin(if (first) 0 else 14))
+                if (first) {
+                    val sep = View(ctx); sep.background = sepBg
+                    val sepLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+                    sepLp.topMargin = dp(14); sepLp.bottomMargin = dp(10)
+                    panel.addView(sep, sepLp)
+                    panel.addView(mv, margin(4))
+                    first = false
+                }
+            }
+        }
+        if (first) panel.addView(mv, margin(0))
 
         val handle = FrameLayout(ctx)
         val line = View(ctx); line.background = lineBg
@@ -348,8 +450,8 @@ class LayerOverlay(private val ctx: Context) {
         batFillBg.setColor(accent); volFillBg.setColor(accent); brightFillBg.setColor(accent)
         lineBg.setColors(intArrayOf(withAlpha(accent, 0), withAlpha(accent, 0x99), withAlpha(accent, 0)))
         sepBg.setColors(intArrayOf(withAlpha(accent, 0), accent, withAlpha(accent, 0)))
-        torchBg?.setColor(if (torchOn) accent else dark)
-        silentBg?.setColor(if (silentMode) accent else dark)
+        val tb = torchBg; if (tb != null) tb.setColor(if (torchOn) accent else dark)
+        val sb = silentBg; if (sb != null) sb.setColor(if (silentMode) accent else dark)
         torchChip?.setTextColor(if (torchOn) 0xFF111111.toInt() else Color.WHITE)
         silentChip?.setTextColor(if (silentMode) 0xFF111111.toInt() else Color.WHITE)
         eyes?.setLook(mood, accent)
@@ -385,9 +487,12 @@ class LayerOverlay(private val ctx: Context) {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val m = when {
             now < surpriseUntil -> Mood.SURPRISED
-            n >= 10 -> Mood.ANGRY; n >= 6 -> Mood.SICK
-            !charging && batteryPct <= 5 -> Mood.UPSET; !charging && batteryPct <= 15 -> Mood.SAD
-            hour < 6 -> Mood.SLEEPY; else -> Mood.HAPPY
+            n >= 10 -> Mood.ANGRY
+            n >= 6 -> Mood.SICK
+            !charging && batteryPct <= 5 -> Mood.UPSET
+            !charging && batteryPct <= 15 -> Mood.SAD
+            hour < 6 -> Mood.SLEEPY
+            else -> Mood.HAPPY
         }
         setMood(m)
     }
@@ -465,7 +570,12 @@ class LayerOverlay(private val ctx: Context) {
         c.animate().translationX(0f).setDuration(260L).setInterpolator(DecelerateInterpolator()).start()
 
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val hello: String = when { hour in 5..11 -> "Доброе утро! ☀️"; hour in 12..17 -> "Как дела? 👋"; hour in 18..22 -> "Добрый вечер 🌆"; else -> "Тсс... уже поздно 🌙" }
+        val hello: String = when {
+            hour in 5..11 -> "Доброе утро! ☀️"
+            hour in 12..17 -> "Как дела? 👋"
+            hour in 18..22 -> "Добрый вечер 🌆"
+            else -> "Тсс... уже поздно 🌙"
+        }
         say(mods.greeting ?: hello)
     }
 
@@ -567,7 +677,7 @@ class LayerOverlay(private val ctx: Context) {
     }
 
     private fun pollMusic() {
-        if (hid("music")) return
+        if (musicBox == null) return
         var ctrl: MediaController? = null
         try {
             val msm = ctx.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -605,7 +715,7 @@ class LayerOverlay(private val ctx: Context) {
     }
 
     private fun maybeFetchWeather() {
-        if (hid("weather")) return
+        if (weatherView == null) return
         val now = System.currentTimeMillis(); if (now - lastWeather < 20L * 60L * 1000L) return
         lastWeather = now
         Thread {
