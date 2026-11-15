@@ -21,6 +21,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -162,7 +163,7 @@ class MainActivity : Activity() {
         b.setPadding(dp(16), dp(24), dp(16), dp(24))
         val sv = ScrollView(this)
         sv.setBackgroundColor(bgColor)
-        sv.addView(b, ScrollView.LayoutParams(mp, wc))
+        sv.addView(b, FrameLayout.LayoutParams(mp, wc))
         rootCol.addView(sv, LinearLayout.LayoutParams(mp, 0, 1f))
         body = b
         scroll = sv
