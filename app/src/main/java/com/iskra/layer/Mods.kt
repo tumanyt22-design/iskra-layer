@@ -2,109 +2,216 @@ package com.iskra.layer
 
 import android.content.Context
 import android.graphics.Color
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 
-class ModButton(val icon: String, val action: String, val arg: String)
+data class ModButton(
+    val icon: String,
+    val action: String,
+    val arg: String = ""
+)
 
-class ModState(
-    val hidden: Set<String>,
-    val buttons: List<ModButton>,
-    val accent: Int?,
-    val greeting: String?
+data class ModLayout(
+    val width: String = "",
+    val padding: Int = 20,
+    val scale: Float = 1f
+)
+
+data class ModState(
+    val name: String = "",
+    val greeting: String? = null,
+    val accent: Int? = null,
+    val bgColor: Int? = null,
+    val bgImage: String? = null,
+    val order: List<String> = emptyList(),
+    val hidden: Set<String> = emptySet(),
+    val buttons: List<ModButton> = emptyList(),
+    val layout: ModLayout = ModLayout(),
+    val text: Map<String, String> = emptyMap()
 )
 
 object Mods {
-    const val MAX_BUTTONS = 12
+    private const val PREFS = "layer"
+    private const val KEY_GALLERY_PENDING = "mod_gallery_pending"
+    private const val KEY_MOD_BG_IMAGE = "mod_bg_image"
 
-    val EXAMPLE = """{"name":"Пример","greeting":"Привет из мода!","hide":[],"buttons":[{"icon":"📶","action":"wifi"},{"icon":"🔵","action":"bluetooth"},{"icon":"🌐","action":"url","arg":"https://google.com"},{"icon":"💬","action":"say","arg":"Это кнопка из мода"}]}"""
-
-    fun dir(c: Context): File {
-        val d = File(c.filesDir, "mods")
-        if (!d.exists()) d.mkdirs()
-        return d
+    private fun dir(c: Context): File {
+        val f = File(c.filesDir, "mods")
+        if (!f.exists()) f.mkdirs()
+        return f
     }
 
-    fun list(c: Context): List<File> {
-        val arr = dir(c).listFiles() ?: return emptyList()
-        val out = ArrayList<File>()
-        for (f in arr) {
-            if (f.isFile && f.name.endsWith(".json")) out.add(f)
+    private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun list(c: Context): List<File> =
+        dir(c).listFiles()?.filter { it.isFile && it.name.endsWith(".json", true) }?.sortedBy { it.name } ?: emptyList()
+
+    fun isEnabled(c: Context, fileName: String): Boolean =
+        prefs(c).getBoolean("mod_" + fileName, false)
+
+    fun setEnabled(c: Context, fileName: String, enabled: Boolean) {
+        prefs(c).edit().putBoolean("mod_" + fileName, enabled).apply()
+        if (enabled) {
+            try {
+                val obj = JSONObject(File(dir(c), fileName).readText())
+                if (obj.optString("bg_image", "") == "gallery") {
+                    prefs(c).edit().putBoolean(KEY_GALLERY_PENDING, true).apply()
+                }
+            } catch (_: Exception) {}
         }
-        out.sortBy { it.name }
-        return out
     }
 
-    fun isEnabled(c: Context, name: String): Boolean = LayerPrefs.getInt(c, "mod_" + name, 1) == 1
-    fun setEnabled(c: Context, name: String, on: Boolean) { LayerPrefs.putInt(c, "mod_" + name, if (on) 1 else 0) }
+    fun delete(c: Context, file: File) {
+        file.delete()
+        prefs(c).edit().remove("mod_" + file.name).apply()
+    }
 
-    fun delete(c: Context, f: File) { try { f.delete() } catch (_: Exception) {} }
-
-    fun title(f: File): String {
+    fun title(file: File): String {
         return try {
-            JSONObject(f.readText()).optString("name", f.name)
-        } catch (e: Exception) {
-            f.name + " (ошибка)"
+            val name = JSONObject(file.readText()).optString("name", "")
+            if (name.isNotBlank()) name else file.nameWithoutExtension
+        } catch (_: Exception) {
+            file.nameWithoutExtension
         }
     }
 
-    // Возвращает текст ошибки или null, если всё хорошо
-    fun save(c: Context, rawName: String, text: String): String? {
-        try {
-            JSONObject(text)
-        } catch (e: Exception) {
-            return "Это не JSON: " + (e.message ?: "")
-        }
-        var n = rawName.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        if (!n.endsWith(".json")) n = n + ".json"
-        if (!n.any { it.isLetterOrDigit() }) n = "mod_" + (System.currentTimeMillis() / 1000L) + ".json"
-        if (n.length > 60) n = n.substring(n.length - 60)
+    fun save(c: Context, fileName: String, json: String): String? {
         return try {
-            File(dir(c), n).writeText(text)
+            val obj = JSONObject(json)
+            val safeName = fileName.substringAfterLast('/').substringBeforeLast('.')
+                .replace(Regex("[^A-Za-z0-9А-Яа-я_-]"), "_")
+                .ifBlank { "mod" } + ".json"
+            val out = File(dir(c), safeName)
+            out.writeText(obj.toString(2))
+            if (obj.optString("bg_image", "") == "gallery") {
+                prefs(c).edit().putBoolean(KEY_GALLERY_PENDING, true).apply()
+            }
             null
         } catch (e: Exception) {
-            "Не удалось сохранить файл"
+            "Ошибка JSON: ${e.message ?: "проверь синтаксис"}"
         }
+    }
+
+    fun consumeGalleryRequest(c: Context): Boolean {
+        val p = prefs(c)
+        val pending = p.getBoolean(KEY_GALLERY_PENDING, false)
+        if (pending) p.edit().putBoolean(KEY_GALLERY_PENDING, false).apply()
+        return pending
+    }
+
+    fun clearGalleryRequest(c: Context) {
+        prefs(c).edit().putBoolean(KEY_GALLERY_PENDING, false).apply()
     }
 
     fun load(c: Context): ModState {
-        val hidden = HashSet<String>()
-        val buttons = ArrayList<ModButton>()
-        var accent: Int? = null
+        var name = ""
         var greeting: String? = null
-        for (f in list(c)) {
-            if (!isEnabled(c, f.name)) continue
+        var accent: Int? = null
+        var bgColor: Int? = null
+        var bgImage: String? = null
+        var order: List<String> = emptyList()
+        val hidden = LinkedHashSet<String>()
+        val buttons = ArrayList<ModButton>()
+        var layout = ModLayout()
+        val text = LinkedHashMap<String, String>()
+
+        for (file in list(c)) {
+            if (!isEnabled(c, file.name)) continue
             try {
-                val o = JSONObject(f.readText())
-                val h = o.optJSONArray("hide")
-                if (h != null) {
-                    for (i in 0 until h.length()) hidden.add(h.optString(i))
+                val obj = JSONObject(file.readText())
+                if (obj.has("name")) name = obj.optString("name", name)
+                if (obj.has("greeting")) greeting = obj.optString("greeting", "")
+                if (obj.has("accent")) accent = parseColor(obj.optString("accent", ""))
+                if (obj.has("bg")) bgColor = parseColor(obj.optString("bg", ""))
+                if (obj.has("bg_image")) {
+                    val image = obj.optString("bg_image", "")
+                    bgImage = if (image == "gallery") {
+                        prefs(c).getString(KEY_MOD_BG_IMAGE, null)
+                    } else image.takeIf { it.isNotBlank() }
                 }
-                val b = o.optJSONArray("buttons")
-                if (b != null) {
-                    for (i in 0 until b.length()) {
-                        if (buttons.size >= MAX_BUTTONS) break
-                        val bo = b.optJSONObject(i) ?: continue
-                        val icon = bo.optString("icon", "•")
-                        val action = bo.optString("action", "")
-                        val arg = bo.optString("arg", bo.optString("pkg", bo.optString("url", bo.optString("text", ""))))
-                        buttons.add(ModButton(icon, action, arg))
+                if (obj.has("order")) order = readStrings(obj.optJSONArray("order"))
+                readStrings(obj.optJSONArray("hide")).forEach { hidden.add(it) }
+
+                val arr = obj.optJSONArray("buttons")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val b = arr.optJSONObject(i) ?: continue
+                        val icon = b.optString("icon", "•")
+                        val action = b.optString("action", "")
+                        val arg = b.optString("arg", "")
+                        if (action.isNotBlank()) buttons.add(ModButton(icon, action, arg))
                     }
                 }
-                val ac = o.optString("accent", "")
-                if (ac.isNotEmpty()) {
-                    try { accent = Color.parseColor(ac) } catch (_: Exception) {}
+
+                val lo = obj.optJSONObject("layout")
+                if (lo != null) {
+                    val width = lo.optString("width", layout.width).lowercase(Locale.ROOT)
+                    val safeWidth = if (width in listOf("wide", "narrow", "normal")) width else layout.width
+                    val padding = if (lo.has("padding")) lo.optInt("padding", layout.padding).coerceIn(4, 40) else layout.padding
+                    val scale = if (lo.has("scale")) lo.optDouble("scale", layout.scale.toDouble()).toFloat().coerceIn(0.65f, 1.35f) else layout.scale
+                    layout = ModLayout(safeWidth, padding, scale)
                 }
-                val g = o.optString("greeting", "")
-                if (g.isNotEmpty()) greeting = g
-                val bgStr = o.optString("bg", "")
-                if (bgStr.isNotEmpty()) {
-                    try { bgColor = Color.parseColor(bgStr) } catch (_: Exception) {}
+
+                val tx = obj.optJSONObject("text")
+                if (tx != null) {
+                    val keys = tx.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (tx.opt(key) is String) text[key] = tx.optString(key)
+                    }
                 }
             } catch (_: Exception) {
-                // кривой мод просто пропускаем
+                // Повреждённый или неподдерживаемый мод пропускается, остальные продолжают работать.
             }
         }
-        return ModState(hidden, buttons, accent, greeting)
+
+        return ModState(
+            name = name,
+            greeting = greeting,
+            accent = accent,
+            bgColor = bgColor,
+            bgImage = bgImage,
+            order = order,
+            hidden = hidden,
+            buttons = buttons,
+            layout = layout,
+            text = text
+        )
     }
+
+    private fun readStrings(array: JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        val result = ArrayList<String>()
+        for (i in 0 until array.length()) {
+            val value = array.optString(i, "").trim()
+            if (value.isNotEmpty() && !result.contains(value)) result.add(value)
+        }
+        return result
+    }
+
+    private fun parseColor(value: String): Int? {
+        val v = value.trim()
+        if (v.isEmpty()) return null
+        return try {
+            Color.parseColor(if (v.startsWith("#")) v else "#$v")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    const val EXAMPLE = """{
+  "name": "Неоновый слой",
+  "bg": "#E6101724",
+  "bg_image": "",
+  "order": ["clock", "eyes", "buttons", "weather", "battery", "music", "volume", "brightness"],
+  "hide": [],
+  "buttons": [
+    {"icon": "🔦", "action": "torch", "arg": ""},
+    {"icon": "⚙️", "action": "settings", "arg": ""}
+  ],
+  "layout": {"width": "wide", "padding": 20, "scale": 1.0},
+  "text": {"greeting": "Привет из нового мода!", "battery_label": "Заряд"}
+}"""
 }
