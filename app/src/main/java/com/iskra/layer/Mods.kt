@@ -97,6 +97,10 @@ object Mods {
                 }
                 val g = o.optString("greeting", "")
                 if (g.isNotEmpty()) greeting = g
+                val bgStr = o.optString("bg", "")
+                if (bgStr.isNotEmpty()) {
+                    try { bgColor = Color.parseColor(bgStr) } catch (_: Exception) {}
+                }
             } catch (_: Exception) {
                 // кривой мод просто пропускаем
             }
